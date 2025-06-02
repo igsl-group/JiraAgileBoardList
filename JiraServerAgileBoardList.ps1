@@ -1,22 +1,23 @@
 #Requires -Version 7
 <#
 	.SYNOPSIS 
-		Exports list of agile boards from Jira Cloud.
+		Exports list of agile boards from Jira Server.
+		Includes projects involved.
 		
 	.PARAMETER Domain
-		Jira Cloud domain, e.g. consoleconnect-sandbox-824.atlassian.net
+		Jira Server domain, e.g. jira.pccwglobal.com
 		
-	.PARAMETER Email
-		User email.
+	.PARAMETER User
+		User name.
 		
-	.PARAMETER Token
-		API token.
+	.PARAMETER Password
+		password.
 		
 	.PARAMETER Protocol
 		https or http. Default https.
 		
 	.PARAMETER Csv
-		Output CSV path. Default AgileBoardList.[Timestamp].csv.
+		Output CSV path. Default ServerAgileBoardList.[Timestamp].csv.
 #>
 Param(
 	[Parameter(Mandatory)]
@@ -25,9 +26,9 @@ Param(
 	[string] $Protocol = 'https',
 	
 	[Parameter(Mandatory)]
-	[string] $Email,
+	[string] $User,
 	
-	[string] $Token = "",
+	[string] $Password = "",
 	
 	[string] $Csv = ""
 )
@@ -84,8 +85,6 @@ function GetAgileBoards {
 	do {
 		$pageSize = 0
 		$Body = @{
-			'expand' = 'admins,permissions';
-			'includePrivate' = 'true';
 			'startAt' = $page;
 		}
 		$Uri = $Protocol + '://' + $Domain + '/rest/agile/1.0/board'
@@ -173,15 +172,15 @@ function GetAgileBoardFilter {
 }
 
 # Main body
-if (-not $Token) {
-	$pwd = Read-Host "Enter API Token" -AsSecureString
-	$Token = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pwd))
+if (-not $Password) {
+	$pwd = Read-Host "Enter password" -AsSecureString
+	$Password = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pwd))
 }
-$AuthHeader = GetAuthHeader $Email $Token
+$AuthHeader = GetAuthHeader $User $Password
 
 if (-not $Csv) {
 	$Timestamp = Get-Date -Format 'yyyyMMddHHmmss'
-	$Csv = 'AgileBoardList.' + $Timestamp + '.csv'
+	$Csv = 'ServerAgileBoardList.' + $Timestamp + '.csv'
 }	
 
 $AgileBoardMap = GetAgileBoards $AuthHeader
@@ -197,37 +196,13 @@ foreach ($Board in $AgileBoardMap) {
 		$Item['Private'] = 'N'
 	}
 	
-	# Location, could be user or project
-	if ($Board.location.userId) {
-		$Item['Location'] = 'User: ' + $Board.location.displayName + ' (' + $Board.location.userAccountId + ')'
-	} elseif ($Board.location.projectId) {
-		$Item['Location'] = 'Project: ' + $Board.location.displayName
-	} else {
-		$Item['Location'] = ''
-	}
-	
-	# Admin list
-	$AdminList = ''
-	foreach ($Admin in $Board.admins.users) {
-		$MatchInfo = $Admin.self | Select-String -Pattern '^.+\?accountId=(.+)$'
-		$AccountId = $MatchInfo.Matches.Groups[1].Value
-		$AdminList += "`nUser: " + $Admin.displayName + ' (' + $AccountId + ')'
-	}
-	foreach ($Group in $Board.admins.groups) {
-		$AdminList += "`nGroup: " + $Group.name
-	}
-	if ($AdminList) {
-		$Item['Administrators'] = $AdminList.SubString(1)
-	} else {
-		$Item['Administrators'] = ''
-	}
-	
 	# Project list
 	$ProjectMap = GetAgileBoardProjects $AuthHeader $Board
 	$ProjectList = ''
 	$ProjectCount = 0
 	foreach($Project in $ProjectMap) {
-		$ProjectList += "`n" + $Project.name + ' (' + $Project.key + ') Type: ' + $Project.projectTypeKey
+		#$ProjectList += "`n" + $Project.name + ' (' + $Project.key + ') Type: ' + $Project.projectTypeKey
+		$ProjectList += ',' + $Project.key
 		$ProjectCount++
 	}
 	if ($ProjectList) {
@@ -253,5 +228,5 @@ foreach ($Board in $AgileBoardMap) {
 	
 	# Output to CSV
 	$NewRow = New-Object PsObject -Property $Item
-	Export-Csv $Csv -inputobject $NewRow -Append
+	Export-Csv $Csv -NoTypeInformation -InputObject $NewRow -Append
 }
