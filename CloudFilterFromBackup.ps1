@@ -15,23 +15,46 @@
 	.PARAMETER Protocol
 		https or http. Default https.
 		
-	.PARAMETER Pause
-		Switch. If specified, pause after processing one filter.
-#>
-<#
-	Take input CSV with columns:
-		1. id
-		2. name
-		3. jql
-		4. owner
-	
-	Take permission CSV with columns:
-		1. FilterID
-		2. Type
-		3. Rights
-		4. Param1
-		5. Param2
+	.PARAMETER FilterCsv
+		CSV file containing filters to reconstruct. 
+		Must contain the following columns: 
+			1. id
+				A reference ID between CSV files, not filter Id in Jira.
+			2. name
+				Name of filter.
+			3. jql
+				JQL.
+			4. owner
+				Account ID of filter owner.
+
+	.PARAMETER PermissionCsv
+		CSV file containing filter permissions. 
+		Must contain the following columns: 
+			1. id
+				A reference ID between CSV files, not filter Id in Jira.
+			2. type
+				One of the following: loggedin, project, group, user
+			3. rights
+				One of the following: 1 (View), 2 (Edit), 3 (View and Edit). 2 is never used in Jira.
+			4. param1
+				When type is:
+					project - project id. Use /rest/api/latest/project/[ProjectKey] to retrieve project id.
+					group - group NAME. Group names can be found in https://admin.atlassian.com/
+					user - account id. Account ids can be found in https://admin.atlassian.com/
+			5. param2
+				Project role id when type is project. Null for all roles.
+				Use /rest/api/latest/role to get full list of project roles.
+		This CSV file is in a many-to-one relationship with FilterCsv.
+		Note that if you specify loggedin for a rights, you cannot have other types in the same rights. 
+		i.e. If you specify loggedin for view, you cannot have project/user/group for view. But you can have project/user/group for Edit.
 		
+	.PARAMETER PauseAction
+		Switch. If specified, pause after each modification action.
+		
+	.PARAMETER PauseFilter
+		Switch. If specified, pause after processing each filter CSV record.
+
+	Algorithm
 	1. Take backup CSVs for filter and share permission input (preprocess filter reference id to name).
 	2. Take list of filter ids (in backup) to be reconstructed.
 	3. For each filter in current batch:
@@ -64,7 +87,10 @@ Param(
 	[string] $DataCsv,
 	
 	[Parameter()]
-	[switch] $Pause
+	[switch] $PauseAction,
+	
+	[Parameter()]
+	[switch] $PauseFilter
 )
 
 class RestException : Exception {
@@ -221,7 +247,7 @@ function ReadSharePermission {
 	$Result = @{}
 	$List = Import-Csv -Path $Path
 	foreach ($Item in $List) {
-		$id = $Item.FilterID
+		$id = $Item.id
 		$Payload = $null
 		if (-not $Result[$id]) {
 			$Payload = @{
@@ -233,23 +259,23 @@ function ReadSharePermission {
 		}
 		# Add item's data to payload
 		$Data = @{}
-		switch ($Item.Type) {
+		switch ($Item.type) {
 			'group' {
 				$Data.type = 'group'
 				$Data.group = @{
-					'name' = $Item.Param1
+					'name' = $Item.param1
 				}
 				break
 			}
 			'project' {
 				$Data.type = 'project'
 				$Data.project = @{
-					'id' = $Item.Param1
+					'id' = $Item.param1
 				}
-				if ($Item.Param2) {
+				if ($Item.param2) {
 					$Data.type = 'projectRole'
 					$Data.role = @{
-						'id' = $Item.Param2
+						'id' = $Item.param2
 					}
 				}
 				break
@@ -257,7 +283,7 @@ function ReadSharePermission {
 			'user' {
 				$Data.type = 'user'
 				$Data.user = @{
-					'accountId' = $Item.Param1
+					'accountId' = $Item.param1
 				}
 				break
 			}
@@ -301,6 +327,17 @@ function Log {
 	$Data
 }
 
+function PausePrompt {
+	Param (
+		[string] $Msg
+	)
+	if ($Msg) {
+		Write-Host "`t${Msg}"
+	}
+	Write-Host "`t`tEnter to continue / Ctrl-C to exit" -NoNewline
+	$Null = $Host.UI.ReadLine()
+}
+
 # Main body
 if (-not $Token) {
 	$pwd = Read-Host "Enter API token" -AsSecureString
@@ -337,6 +374,7 @@ foreach ($Filter in $FilterData.GetEnumerator()) {
 	$Id = GetFilterId $AuthHeader $True $Name $Owner
 	if (-not $Id) {
 		$Data = Log $Data "Filter does not exist, recreating..."
+		if ($PauseAction) { PausePrompt }
 		$Error = $False
 		$DummyFilterList = [System.Collections.ArrayList]::new()
 		$DependencyList = GetFilterDependencies $Jql
@@ -344,17 +382,21 @@ foreach ($Filter in $FilterData.GetEnumerator()) {
 			$Data = Log $Data "Filter depends on filter ${Dependency}"
 			if (-not (GetFilterId $AuthHeader $False $Dependency)) {
 				$Data = Log $Data "Dependency filter ${Dependency} is inaccessible, creating dummy..."
+				if ($PauseAction) { PausePrompt }
 				try {
 					$DummyId = CreateFilter $AuthHeader $Dependency 'order by created asc'
 					[void] $DummyFilterList.Add($DummyId)
 					$Data = Log $Data "Dependency filter ${Dependency} created: ${DummyId}"
+					if ($PauseAction) { PausePrompt }
 				} catch {
 					$Data = Log $Data ("Failed to create dummy filter ${Dependency}" + $_.ToString())
+					if ($PauseAction) { PausePrompt }
 					$Error = $True
 					break
 				}
 			} else {
 				$Data = Log $Data "Dependency filter ${Dependency} exists and is accessible"
+				if ($PauseAction) { PausePrompt }
 			}
 		}
 		if (-not $Error) {
@@ -364,6 +406,7 @@ foreach ($Filter in $FilterData.GetEnumerator()) {
 				$Data = Log $Data "Created filter: ${Id}"
 				$Data['CurrentId'] = $Id
 				$Data['Create'] = 'Success'
+				if ($PauseAction) { PausePrompt }
 				try {
 					$Data = Log $Data "Changing owner..."
 					ChangeFilterOwner $AuthHeader $Id $Owner
@@ -374,30 +417,34 @@ foreach ($Filter in $FilterData.GetEnumerator()) {
 					$Data['ChangeOwner'] = 'Failed'
 					$Data['Messages'] += $_.ToString() + ';'
 				}
+				if ($PauseAction) { PausePrompt }
 			} catch {
 				$Data = Log $Data ("Failed to create filter: " + $_.ToString())
 				$Data['Create'] = 'Failed'
 				$Data['Messages'] += $_.ToString() + ';'
+				if ($PauseAction) { PausePrompt }
 			}
 		}
 		foreach ($DummyId in $DummyFilterList) {
 			$Data = Log $Data "Deleting dummy filter: ${DummyId}"
+			if ($PauseAction) { PausePrompt }
 			try {
 				DeleteFilter $AuthHeader $DummyId
 				$Data = Log $Data "Deleted dummy filter: ${DummyId}"
 			} catch {
 				$Data = Log $Data ("Failed to delete dummy filter ${DummyId}: " + $_.ToString())
 			}
+			if ($PauseAction) { PausePrompt }
 		}
 	} else {
 		$Data = Log $Data "Filter already exists"
 		$Data['CurrentId'] = $Id
 		$Data['Create'] = 'Filter already exists'
+		if ($PauseAction) { PausePrompt }
 	}
 	$NewRow = New-Object PsObject -Property $Data
 	Export-Csv -NoTypeInformation -Path $DataCsv -InputObject $NewRow -Append
-	if ($Pause) {
-		Write-Host "Press Enter to continue or Ctrl-C to exit" -NoNewLine
-		$Null = $Host.UI.ReadLine()
+	if ($PauseFilter) {
+		PausePrompt 'Filter processed'
 	}
 }
