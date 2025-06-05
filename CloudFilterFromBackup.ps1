@@ -1,4 +1,3 @@
-#Requires -version 7
 <#
 	.SYNOPSIS 
 		Filter reconstruction from Jira Cloud backup.
@@ -18,31 +17,22 @@
 	.PARAMETER FilterCsv
 		CSV file containing filters to reconstruct. 
 		Must contain the following columns: 
-			1. id
-				A reference ID between CSV files, not filter Id in Jira.
-			2. name
-				Name of filter.
-			3. jql
-				JQL.
-			4. owner
-				Account ID of filter owner.
+			id - A reference ID between CSV files, not filter Id in Jira.
+			name - Name of filter.
+			jql - JQL.
+			owner - Account ID of filter owner.
 
 	.PARAMETER PermissionCsv
 		CSV file containing filter permissions. 
 		Must contain the following columns: 
-			1. id
-				A reference ID between CSV files, not filter Id in Jira.
-			2. type
-				One of the following: loggedin, project, group, user
-			3. rights
-				One of the following: 1 (View), 2 (Edit), 3 (View and Edit). 2 is never used in Jira.
-			4. param1
-				When type is:
-					project - project id. Use /rest/api/latest/project/[ProjectKey] to retrieve project id.
-					group - group NAME. Group names can be found in https://admin.atlassian.com/
-					user - account id. Account ids can be found in https://admin.atlassian.com/
-			5. param2
-				Project role id when type is project. Null for all roles.
+			id - A reference ID between CSV files, not filter Id in Jira.
+			type - One of the following: loggedin, project, group, user
+			rights - One of the following: 1 (View), 2 (Edit), 3 (View and Edit). 2 is never used in Jira.
+			param1 - When type is:
+				project - project id. Use /rest/api/latest/project/[ProjectKey] to retrieve project id.
+				group - group NAME. Group names can be found in https://admin.atlassian.com/
+				user - account id. Account ids can be found in https://admin.atlassian.com/
+			param2 - Project role id when type is project. Null for all roles.
 				Use /rest/api/latest/role to get full list of project roles.
 		This CSV file is in a many-to-one relationship with FilterCsv.
 		Note that if you specify loggedin for a rights, you cannot have other types in the same rights. 
@@ -53,19 +43,8 @@
 		
 	.PARAMETER PauseFilter
 		Switch. If specified, pause after processing each filter CSV record.
-
-	Algorithm
-	1. Take backup CSVs for filter and share permission input (preprocess filter reference id to name).
-	2. Take list of filter ids (in backup) to be reconstructed.
-	3. For each filter in current batch:
-		a. Check if filter id exists (shouldn't be, as supplied ids should be missing). 
-			i. If exist, log as "already exist".
-			ii. If option allows update, update JQL.
-		b. If filter reference exists, for each reference, create dummy filter.
-		c. Create filter based on backup data (name, JQL, share permissions).
-		d. Change owner to target user. 
-		e. Delete dummy filter created. 
 #>
+#Requires -version 7
 Param(
 	[Parameter(Mandatory)]
 	[string] $Domain,
